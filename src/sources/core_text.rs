@@ -24,7 +24,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::error::SelectionError;
+use crate::error::{FontLoadingError, SelectionError};
 use crate::family_handle::FamilyHandle;
 use crate::family_name::FamilyName;
 use crate::file_type::FileType;
@@ -157,6 +157,7 @@ fn css_stretchiness_to_core_text_width(css_stretchiness: Stretch) -> f32 {
 struct FontDataInfo {
     data: Arc<Vec<u8>>,
     file_type: FileType,
+    indice_to_font: HashMap<u32, Result<Font, ()>>,
 }
 
 fn create_handles_from_core_text_collection(
@@ -165,46 +166,58 @@ fn create_handles_from_core_text_collection(
     let mut fonts = vec![];
     if let Some(descriptors) = collection.get_descriptors() {
         let mut font_data_info_cache: HashMap<PathBuf, FontDataInfo> = HashMap::new();
-
+        dbg!(descriptors.len());
         'outer: for index in 0..descriptors.len() {
             let descriptor = descriptors.get(index).unwrap();
             let font_path = descriptor.font_path().unwrap();
+            dbg!(&font_path);
+            let mut entry = font_data_info_cache.entry(font_path.clone());
 
-            let data_info = if let Some(data_info) = font_data_info_cache.get(&font_path) {
-                data_info.clone()
-            } else {
-                let mut file = if let Ok(file) = File::open(&font_path) {
-                    file
-                } else {
-                    continue;
-                };
-                let data = if let Ok(data) = utils::slurp_file(&mut file) {
-                    Arc::new(data)
-                } else {
-                    continue;
-                };
+            let mut data_info = match entry {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let mut file = if let Ok(file) = File::open(&font_path) {
+                        file
+                    } else {
+                        continue;
+                    };
+                    let data = if let Ok(data) = utils::slurp_file(&mut file) {
+                        Arc::new(data)
+                    } else {
+                        continue;
+                    };
 
-                let file_type = match Font::analyze_bytes(Arc::clone(&data)) {
-                    Ok(file_type) => file_type,
-                    Err(_) => continue,
-                };
+                    let file_type = match Font::analyze_bytes(Arc::clone(&data)) {
+                        Ok(file_type) => file_type,
+                        Err(_) => continue,
+                    };
 
-                let data_info = FontDataInfo { data, file_type };
+                    let data_info = FontDataInfo {
+                        data,
+                        file_type,
+                        indice_to_font: Default::default(),
+                    };
 
-                font_data_info_cache.insert(font_path.clone(), data_info.clone());
-
-                data_info
+                    entry.insert(data_info)
+                }
             };
 
             match data_info.file_type {
                 FileType::Collection(font_count) => {
                     let postscript_name = descriptor.font_name();
+                    let data = Arc::clone(&data_info.data);
+                    let indices_to_font = &mut data_info.indice_to_font;
                     for font_index in 0..font_count {
-                        if let Ok(font) = Font::from_bytes(Arc::clone(&data_info.data), font_index)
-                        {
+                        if let Ok(font) = indices_to_font.entry(font_index).or_insert_with(|| {
+                            dbg!(font_index);
+                            Font::from_bytes(Arc::clone(&data), font_index).map_err(|_| ())
+                        }) {
                             if let Some(font_postscript_name) = font.postscript_name() {
                                 if postscript_name == font_postscript_name {
-                                    fonts.push(Handle::from_memory(data_info.data, font_index));
+                                    fonts.push(Handle::from_memory(
+                                        data_info.data.clone(),
+                                        font_index,
+                                    ));
                                     continue 'outer;
                                 }
                             }
@@ -212,7 +225,7 @@ fn create_handles_from_core_text_collection(
                     }
                 }
                 FileType::Single => {
-                    fonts.push(Handle::from_memory(data_info.data, 0));
+                    fonts.push(Handle::from_memory(data_info.data.clone(), 0));
                 }
             }
         }
