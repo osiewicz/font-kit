@@ -90,12 +90,10 @@ impl Font {
             unpack_otc_font(&mut new_font_data, font_index)?;
             font_data = Arc::new(new_font_data);
         }
-
-        let core_text_font = match core_text::font::new_from_buffer(&*font_data) {
-            Ok(ct_font) => ct_font,
-            Err(_) => return Err(FontLoadingError::Parse),
-        };
-
+        let data = core_foundation::data::CFData::from_arc(font_data.clone());
+        let descriptor = core_text::font_manager::create_font_descriptor_with_data(data)
+            .map_err(|_| FontLoadingError::Parse)?;
+        let core_text_font = core_text::font::new_from_descriptor(&descriptor, 16.);
         Ok(Font {
             core_text_font,
             font_data: FontData::Memory(font_data),

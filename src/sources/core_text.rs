@@ -158,6 +158,7 @@ struct FontDataInfo {
     data: Arc<Vec<u8>>,
     file_type: FileType,
     indice_to_font: HashMap<u32, Result<Font, ()>>,
+    postscript_name_to_indice: HashMap<String, u32>,
 }
 
 fn create_handles_from_core_text_collection(
@@ -166,11 +167,9 @@ fn create_handles_from_core_text_collection(
     let mut fonts = vec![];
     if let Some(descriptors) = collection.get_descriptors() {
         let mut font_data_info_cache: HashMap<PathBuf, FontDataInfo> = HashMap::new();
-        dbg!(descriptors.len());
         'outer: for index in 0..descriptors.len() {
             let descriptor = descriptors.get(index).unwrap();
             let font_path = descriptor.font_path().unwrap();
-            dbg!(&font_path);
             let mut entry = font_data_info_cache.entry(font_path.clone());
 
             let mut data_info = match entry {
@@ -196,6 +195,7 @@ fn create_handles_from_core_text_collection(
                         data,
                         file_type,
                         indice_to_font: Default::default(),
+                        postscript_name_to_indice: Default::default(),
                     };
 
                     entry.insert(data_info)
@@ -206,13 +206,23 @@ fn create_handles_from_core_text_collection(
                 FileType::Collection(font_count) => {
                     let postscript_name = descriptor.font_name();
                     let data = Arc::clone(&data_info.data);
+                    let index = data_info
+                        .postscript_name_to_indice
+                        .get(&postscript_name)
+                        .cloned();
+                    if let Some(index) = index {
+                        fonts.push(Handle::from_memory(data_info.data.clone(), index));
+                        continue 'outer;
+                    }
                     let indices_to_font = &mut data_info.indice_to_font;
                     for font_index in 0..font_count {
                         if let Ok(font) = indices_to_font.entry(font_index).or_insert_with(|| {
-                            dbg!(font_index);
                             Font::from_bytes(Arc::clone(&data), font_index).map_err(|_| ())
                         }) {
                             if let Some(font_postscript_name) = font.postscript_name() {
+                                data_info
+                                    .postscript_name_to_indice
+                                    .insert(font_postscript_name.clone(), font_index);
                                 if postscript_name == font_postscript_name {
                                     fonts.push(Handle::from_memory(
                                         data_info.data.clone(),
