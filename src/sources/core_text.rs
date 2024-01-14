@@ -177,9 +177,9 @@ fn create_handles_from_core_text_collection(
         'outer: for index in 0..descriptors.len() {
             let descriptor = descriptors.get(index).unwrap();
             let font_path = descriptor.font_path().unwrap();
-            let mut entry = font_data_info_cache.entry(font_path.clone());
+            let entry = font_data_info_cache.entry(font_path.clone());
 
-            let mut data_info = match entry {
+            let data_info = match entry {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     let mut file = if let Ok(file) = File::open(&font_path) {
@@ -212,7 +212,8 @@ fn create_handles_from_core_text_collection(
             match data_info.file_type {
                 FileType::Collection(font_count) => {
                     let postscript_name = descriptor.font_name();
-                    let data = Arc::clone(&data_info.data);
+
+                    let data = &data_info.data;
                     let index = data_info
                         .postscript_name_to_indice
                         .get(&postscript_name)
@@ -225,9 +226,11 @@ fn create_handles_from_core_text_collection(
                     let indices_to_font = &mut data_info.indice_to_font;
                     for font_index in 0..font_count {
                         let mut should_remove = false;
-                        if let Ok(font) = indices_to_font.entry(font_index).or_insert_with(|| {
-                            Font::from_bytes(Arc::clone(&data), font_index).map_err(|_| ())
-                        }) {
+                        if let Ok(font) =
+                            indices_to_font.entry(font_index).or_insert_with(move || {
+                                Font::from_bytes(Arc::clone(data), font_index).map_err(|_| ())
+                            })
+                        {
                             if let Some(font_postscript_name) = font.postscript_name() {
                                 if !allowlist_postscript_names.contains(&font_postscript_name) {
                                     should_remove = true;
@@ -246,7 +249,17 @@ fn create_handles_from_core_text_collection(
                             }
                         }
                         if should_remove {
-                            *indices_to_font.get_mut(&font_index).unwrap() = Err(());
+                            dbg!("No need");
+                            let entry = indices_to_font.get_mut(&font_index).unwrap();
+                            let data = if let Ok(entry) = entry {
+                                let ret = entry.copy_font_data();
+                                //dbg!(Arc::strong_count(ret.as_ref().unwrap()));
+                                ret
+                            } else {
+                                None
+                            };
+                            *entry = Err(());
+                            //dbg!(Arc::strong_count(&data.unwrap()));
                         }
                     }
                 }

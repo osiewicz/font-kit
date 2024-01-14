@@ -87,6 +87,7 @@ impl Font {
             font_data = Arc::new(new_font_data);
         } else if font_is_collection(&*font_data) {
             let mut new_font_data = (*font_data).clone();
+
             unpack_otc_font(&mut new_font_data, font_index)?;
             font_data = Arc::new(new_font_data);
         }
