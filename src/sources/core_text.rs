@@ -18,7 +18,7 @@ use core_text::font_collection::{self, CTFontCollection};
 use core_text::font_descriptor::{self, CTFontDescriptor};
 use core_text::font_manager;
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f32;
 use std::fs::File;
 use std::path::PathBuf;
@@ -167,6 +167,13 @@ fn create_handles_from_core_text_collection(
     let mut fonts = vec![];
     if let Some(descriptors) = collection.get_descriptors() {
         let mut font_data_info_cache: HashMap<PathBuf, FontDataInfo> = HashMap::new();
+        let descriptors: Vec<_> = (0..descriptors.len())
+            .map(|index| descriptors.get(index).unwrap())
+            .collect();
+        let mut allowlist_postscript_names = HashSet::new();
+        for item in &descriptors {
+            allowlist_postscript_names.insert(item.font_name());
+        }
         'outer: for index in 0..descriptors.len() {
             let descriptor = descriptors.get(index).unwrap();
             let font_path = descriptor.font_path().unwrap();
@@ -212,25 +219,34 @@ fn create_handles_from_core_text_collection(
                         .cloned();
                     if let Some(index) = index {
                         fonts.push(Handle::from_memory(data_info.data.clone(), index));
+
                         continue 'outer;
                     }
                     let indices_to_font = &mut data_info.indice_to_font;
                     for font_index in 0..font_count {
+                        let mut should_remove = false;
                         if let Ok(font) = indices_to_font.entry(font_index).or_insert_with(|| {
                             Font::from_bytes(Arc::clone(&data), font_index).map_err(|_| ())
                         }) {
                             if let Some(font_postscript_name) = font.postscript_name() {
-                                data_info
-                                    .postscript_name_to_indice
-                                    .insert(font_postscript_name.clone(), font_index);
-                                if postscript_name == font_postscript_name {
-                                    fonts.push(Handle::from_memory(
-                                        data_info.data.clone(),
-                                        font_index,
-                                    ));
-                                    continue 'outer;
+                                if !allowlist_postscript_names.contains(&font_postscript_name) {
+                                    should_remove = true;
+                                } else {
+                                    data_info
+                                        .postscript_name_to_indice
+                                        .insert(font_postscript_name.clone(), font_index);
+                                    if postscript_name == font_postscript_name {
+                                        fonts.push(Handle::from_memory(
+                                            data_info.data.clone(),
+                                            font_index,
+                                        ));
+                                        continue 'outer;
+                                    }
                                 }
                             }
+                        }
+                        if should_remove {
+                            *indices_to_font.get_mut(&font_index).unwrap() = Err(());
                         }
                     }
                 }
